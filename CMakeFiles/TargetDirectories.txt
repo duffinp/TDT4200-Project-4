@@ -1,0 +1,3 @@
+/home/shomea/p/pauldu/Desktop/TDT4200/4/TDT4200-Assignment-4/CMakeFiles/rebuild_cache.dir
+/home/shomea/p/pauldu/Desktop/TDT4200/4/TDT4200-Assignment-4/CMakeFiles/gpurender.dir
+/home/shomea/p/pauldu/Desktop/TDT4200/4/TDT4200-Assignment-4/CMakeFiles/edit_cache.dir

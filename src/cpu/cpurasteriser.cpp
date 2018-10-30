@@ -4,6 +4,7 @@
 #include <limits>
 #include <iostream>
 #include <algorithm>
+#include <omp.h>
 #include "utilities/OBJLoader.hpp"
 #include "utilities/floats.hpp"
 #include "utilities/geometry.hpp"
@@ -241,11 +242,15 @@ std::vector<unsigned char> rasteriseCPU(std::string inputFile, unsigned int widt
 
 	fillWorkQueue(workQueue, largestBoundingBoxSide, depthLimit);
 
+    auto start = std::chrono::high_resolution_clock::now();
+
+    #pragma omp parallel
     for(unsigned int item = 0; item < totalItemsToRender; item++) {
-        if(item % 10000 == 0) {
+        if(item % 1000 == 0) {
             std::cout << item << "/" << totalItemsToRender << " complete." << std::endl;
         }
         workItemCPU objectToRender = workQueue.at(item);
+	#pragma omp for schedule(static)
         for (unsigned int i = 0; i < meshes.size(); i++) {
             Mesh &mesh = meshes.at(i);
             Mesh &transformedMesh = transformedMeshes.at(i);
@@ -254,6 +259,12 @@ std::vector<unsigned char> rasteriseCPU(std::string inputFile, unsigned int widt
         }
     }
 
+    auto end = std::chrono::high_resolution_clock::now();
+
+    	std::chrono::duration<double> time_taken = end - start;
+
+    	std::cout << "The time it took to run the work queue is " << time_taken.count() << " seconds." << std::endl;
+    	
 	std::cout << "Finished!" << std::endl;
 
 	return frameBuffer;
