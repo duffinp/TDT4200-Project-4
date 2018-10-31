@@ -359,6 +359,17 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
 
     std::vector<GPUMesh> meshes = loadWavefrontGPU(inputFile, false);
 
+    int count = 0;
+    checkCudaErrors(cudaGetDeviceCount(&count));
+    std::cout << "There are " << count << " GPU devices on the CUDA driver." << std::endl;
+
+    cudaDeviceProp* prop = new cudaDeviceProp;
+    int device = 0;
+    checkCudaErrors(cudaGetDeviceProperties(prop, device));
+    std::cout << "The name of this CUDA device is " << prop->name << std::endl;
+
+    checkCudaErrors(cudaSetDevice(0));
+
     // We first need to allocate some buffers.
     // The framebuffer contains the image being rendered.
     unsigned char* frameBuffer = new unsigned char[width * height * 4];
@@ -410,6 +421,8 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
 
     std::cout << "Number of items to be rendered: " << totalItemsToRender << std::endl;
 
+    auto start = std::chrono::high_resolution_clock::now();
+    
     unsigned long counter = 0;
     fillWorkQueue(workQueue, largestBoundingBoxSide, depthLimit, &counter);
 
@@ -417,8 +430,16 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
 			totalItemsToRender, workQueue,
 			meshes.data(), meshes.size(),
 			width, height, frameBuffer, depthBuffer);
+    
+    auto end = std::chrono::high_resolution_clock::now();
+
+    std::chrono::duration<double> time_taken = end - start;
+
+    std::cout << "The time it took to run the work queue is " << time_taken.count() << " seconds." << std::endl;
 
     std::cout << "Finished!" << std::endl;
+
+    delete prop;
 
     // Copy the output picture into a vector so that the image dump code is happy :)
     std::vector<unsigned char> outputFramebuffer(frameBuffer, frameBuffer + (width * height * 4));
