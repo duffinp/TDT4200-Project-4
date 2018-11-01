@@ -381,6 +381,31 @@ void fillWorkQueue(
 
 }
 
+
+__global__ void initializeFrameBuffer(unsigned char* framePointer) {
+	int xThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
+	int yThreadIndex = blockIdx.y * blockDim.y + threadIdx.y;
+	int threadIndex = yThreadIndex * gridDim.x * blockDim.x + xThreadIndex;
+	if (threadIndex % 4 == 0) {
+		framePointer[threadIndex] = 255;
+	} else {
+		framePointer[threadIndex] = 0;
+	}
+	//printf("I'm thread number %i, and I just assigned the value %i to the frame buffer!\n", threadIndex, framePointer[threadIndex]);
+
+}
+
+__global__ void initializeDepthBuffer(int* depthPointer) {
+	int xThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
+	int yThreadIndex = blockIdx.y * blockDim.y + threadIdx.y;
+	int threadIndex = yThreadIndex * gridDim.x * blockDim.x + xThreadIndex;
+	depthPointer[threadIndex] = 16777216;
+	//printf("I'm thread number %i, and I just assigned the value %i to the depth buffer!\n", threadIndex, depthPointer[threadIndex]);
+}
+
+
+
+
 // This function kicks off the rasterisation process.
 std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int width, unsigned int height, unsigned int depthLimit) {
     std::cout << "Rendering an image on the GPU.." << std::endl;
@@ -402,6 +427,7 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
     // We first need to allocate some buffers.
     // The framebuffer contains the image being rendered.
     unsigned char* frameBuffer = new unsigned char[width * height * 4];
+
     // The depth buffer is used to make sure that objects closer to the camera occlude/obscure objects that are behind it
     for (unsigned int i = 0; i < (4 * width * height); i+=4) {
 		frameBuffer[i + 0] = 0;
@@ -414,6 +440,30 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
 	for(unsigned int i = 0; i < width * height; i++) {
     	depthBuffer[i] = 16777216; // = 2 ^ 24
     }
+    
+    //We need to allocate more buffers on the GPU for both frame and depth.
+    size_t frameSizeInBytes = width * height * 4 * sizeof(unsigned char);		
+    size_t depthSizeInBytes = width * height * sizeof(int);		
+    unsigned char* framePointer = 0;
+    int* depthPointer = 0;
+    checkCudaErrors(cudaMalloc(&framePointer, frameSizeInBytes));
+    checkCudaErrors(cudaMalloc(&depthPointer, depthSizeInBytes));
+
+    //checkCudaErrors(cudaMemcpy(framePointer, frameBuffer, frameSizeInBytes, cudaMemcpyHostToDevice));
+    //checkCudaErrors(cudaMemcpy(depthPointer, depthBuffer, depthSizeInBytes, cudaMemcpyHostToDevice));
+
+    int frameGridSize = (width * height * 4 + 127) / 128;
+    int depthGridSize = (width * height + 31) / 32;
+    std::cout << "Maximum frame grid size is " << frameGridSize << std::endl;
+    std::cout << "Maximum depth grid size is " << depthGridSize << std::endl;
+    dim3 frameBlock(32, 4, 1);
+    dim3 frameGrid(frameGridSize, 1, 1);
+    dim3 depthBlock(32, 1, 1);
+    dim3 depthGrid(depthGridSize, 1, 1);
+    initializeFrameBuffer<<<frameGrid, frameBlock>>>(framePointer);
+    initializeDepthBuffer<<<depthGrid, depthBlock>>>(depthPointer);
+
+    checkCudaErrors(cudaDeviceSynchronize());
 
     float3 boundingBoxMin = make_float3(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
     float3 boundingBoxMax = make_float3(std::numeric_limits<float>::min(), std::numeric_limits<float>::min(), std::numeric_limits<float>::min());
@@ -468,7 +518,9 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
 
     std::cout << "Finished!" << std::endl;
 
-    delete prop;
+    delete prop; delete frameBuffer; delete depthBuffer;
+    cudaFree(framePointer);
+    cudaFree(depthPointer);
 
     // Copy the output picture into a vector so that the image dump code is happy :)
     std::vector<unsigned char> outputFramebuffer(frameBuffer, frameBuffer + (width * height * 4));
