@@ -288,12 +288,28 @@ void renderMeshes(
         unsigned char* frameBuffer,
         int* depthBuffer
 ) {
-
+    int count = 0;
     for(unsigned int item = 0; item < totalItemsToRender; item++) {
-        workItemGPU objectToRender = workQueue[item];
         for (unsigned int meshIndex = 0; meshIndex < meshCount; meshIndex++) {
             for(unsigned int triangleIndex = 0; triangleIndex < meshes[meshIndex].vertexCount / 3; triangleIndex++) {
-                float4 v0 = meshes[meshIndex].vertices[triangleIndex * 3 + 0];
+            	count++;
+	    }
+        }
+    }
+    std::cout << "The triple loop runs " << count << " times." << std::endl;
+
+    double avg1 = 0; double avg2 = 0; double avg3 = 0;
+    int count1 = 0; int count2 = 0; int count3 = 0;
+
+    for(unsigned int item = 0; item < totalItemsToRender; item++) {
+        auto start1 = std::chrono::high_resolution_clock::now();
+        workItemGPU objectToRender = workQueue[item];
+        for (unsigned int meshIndex = 0; meshIndex < meshCount; meshIndex++) {
+            auto start2 = std::chrono::high_resolution_clock::now();
+            for(unsigned int triangleIndex = 0; triangleIndex < meshes[meshIndex].vertexCount / 3; triangleIndex++) {
+                auto start3 = std::chrono::high_resolution_clock::now();
+
+		float4 v0 = meshes[meshIndex].vertices[triangleIndex * 3 + 0];
                 float4 v1 = meshes[meshIndex].vertices[triangleIndex * 3 + 1];
                 float4 v2 = meshes[meshIndex].vertices[triangleIndex * 3 + 2];
 
@@ -302,9 +318,22 @@ void renderMeshes(
                 runVertexShader(v2, objectToRender.distanceOffset, objectToRender.scale, width, height);
 
                 rasteriseTriangle(v0, v1, v2, meshes[meshIndex], triangleIndex, frameBuffer, depthBuffer, width, height);
-            }
+            	
+		auto end3 = std::chrono::high_resolution_clock::now();
+    		std::chrono::duration<double> time3 = end3 - start3;
+		avg3 += time3.count(); count3++;
+	    }
+            auto end2 = std::chrono::high_resolution_clock::now();
+    	    std::chrono::duration<double> time2 = end2 - start2;
+	    avg2 += time2.count(); count2++;
         }
+        auto end1 = std::chrono::high_resolution_clock::now();
+    	std::chrono::duration<double> time1 = end1 - start1;
+	avg1 += time1.count(); count1++;
     }
+    std::cout << "The average time it took to run a first loop is " << avg1 / count1 << " seconds." << std::endl;
+    std::cout << "The average time it took to run a second loop is " << avg2 / count2 << " seconds." << std::endl;
+    std::cout << "The average time it took to run a third loop is " << avg3 / count3 << " seconds." << std::endl;
 }
 
 
