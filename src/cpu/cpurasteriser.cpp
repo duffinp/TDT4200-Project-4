@@ -246,8 +246,8 @@ std::vector<unsigned char> rasteriseCPU(std::string inputFile, unsigned int widt
 
     #pragma omp parallel
     for(unsigned int item = 0; item < totalItemsToRender; item++) {
-        if(item % 1000 == 0) {
-            std::cout << item << "/" << totalItemsToRender << " complete." << std::endl;
+        if(item % 10000 == 0) {
+            //std::cout << item << "/" << totalItemsToRender << " complete." << std::endl;
         }
         workItemCPU objectToRender = workQueue.at(item);
 	#pragma omp for schedule(static)

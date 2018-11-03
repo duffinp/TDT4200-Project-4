@@ -112,7 +112,7 @@ struct workItemGPU {
     workItemGPU() : scale(1), distanceOffset(make_float3(0, 0, 0)) {}
 };
 
-void runVertexShader( float4 &vertex,
+__device__ void runVertexShader( float4 &vertex,
                       float3 positionOffset,
                       float scale,
 					  unsigned int const width,
@@ -176,7 +176,7 @@ void runVertexShader( float4 &vertex,
 }
 
 
-void runFragmentShader( unsigned char* frameBuffer,
+__device__ void runFragmentShader( unsigned char* frameBuffer,
 						unsigned int const baseIndex,
 						GPUMesh &mesh,
 						unsigned int triangleIndex,
@@ -216,7 +216,6 @@ void runFragmentShader( unsigned char* frameBuffer,
     frameBuffer[4 * baseIndex + 1] = colour.y * 255.0f;
     frameBuffer[4 * baseIndex + 2] = colour.z * 255.0f;
     frameBuffer[4 * baseIndex + 3] = 255;
-
 }
 
 /**
@@ -227,7 +226,7 @@ void runFragmentShader( unsigned char* frameBuffer,
  * @param width                   width of the image
  * @param height                  height of the image
  */
-void rasteriseTriangle( float4 &v0, float4 &v1, float4 &v2,
+__device__ void rasteriseTriangle( float4 &v0, float4 &v1, float4 &v2,
                         GPUMesh &mesh,
                         unsigned int triangleIndex,
                         unsigned char* frameBuffer,
@@ -261,15 +260,14 @@ void rasteriseTriangle( float4 &v0, float4 &v1, float4 &v2,
 				// If the point is closer than any point we have seen thus far, render it.
 				// Otherwise it is hidden behind another object, and we can throw it away
 				// Because it will be invisible anyway.
-                if (pixelDepth >= -1 && pixelDepth <= 1) {
+                		if (pixelDepth >= -1 && pixelDepth <= 1) {
+					    // First we must assign the depth buffer to the minimum value
 					int pixelDepthConverted = depthFloatToInt(pixelDepth);
-                 	if (pixelDepthConverted < depthBuffer[y * width + x]) {
-					    // If it is, we update the depth buffer to the new depth.
-					    depthBuffer[y * width + x] = pixelDepthConverted;
-
+					atomicMin(&depthBuffer[y * width + x], pixelDepthConverted);
 					    // And finally we determine the colour of the pixel, now that 
 					    // we know our pixel is the closest we have seen thus far.
-						runFragmentShader(frameBuffer, x + (width * y), mesh, triangleIndex, make_float3(u, v, w));
+					if (pixelDepthConverted == depthBuffer[y * width + x]) {
+					    runFragmentShader(frameBuffer, x + (width * y), mesh, triangleIndex, make_float3(u, v, w));
 					}
 				}
 			}
@@ -278,7 +276,7 @@ void rasteriseTriangle( float4 &v0, float4 &v1, float4 &v2,
 }
 
 
-void renderMeshes(
+__global__ void renderMeshes(
         unsigned long totalItemsToRender,
         workItemGPU* workQueue,
         GPUMesh* meshes,
@@ -288,26 +286,13 @@ void renderMeshes(
         unsigned char* frameBuffer,
         int* depthBuffer
 ) {
-    int count = 0;
-    for(unsigned int item = 0; item < totalItemsToRender; item++) {
-        for (unsigned int meshIndex = 0; meshIndex < meshCount; meshIndex++) {
-            for(unsigned int triangleIndex = 0; triangleIndex < meshes[meshIndex].vertexCount / 3; triangleIndex++) {
-            	count++;
-	    }
-        }
-    }
-    std::cout << "The triple loop runs " << count << " times." << std::endl;
-
-    double avg1 = 0; double avg2 = 0; double avg3 = 0;
-    int count1 = 0; int count2 = 0; int count3 = 0;
-
-    for(unsigned int item = 0; item < totalItemsToRender; item++) {
-        auto start1 = std::chrono::high_resolution_clock::now();
+    unsigned int item = blockIdx.x * blockDim.x + threadIdx.x;
+    //printf("Item number %i is now rendering in the work queue.\n", item);
+    if (item < totalItemsToRender) {
+    //for(unsigned int item = 0; item < totalItemsToRender; item++) {
         workItemGPU objectToRender = workQueue[item];
         for (unsigned int meshIndex = 0; meshIndex < meshCount; meshIndex++) {
-            auto start2 = std::chrono::high_resolution_clock::now();
             for(unsigned int triangleIndex = 0; triangleIndex < meshes[meshIndex].vertexCount / 3; triangleIndex++) {
-                auto start3 = std::chrono::high_resolution_clock::now();
 
 		float4 v0 = meshes[meshIndex].vertices[triangleIndex * 3 + 0];
                 float4 v1 = meshes[meshIndex].vertices[triangleIndex * 3 + 1];
@@ -318,22 +303,10 @@ void renderMeshes(
                 runVertexShader(v2, objectToRender.distanceOffset, objectToRender.scale, width, height);
 
                 rasteriseTriangle(v0, v1, v2, meshes[meshIndex], triangleIndex, frameBuffer, depthBuffer, width, height);
-            	
-		auto end3 = std::chrono::high_resolution_clock::now();
-    		std::chrono::duration<double> time3 = end3 - start3;
-		avg3 += time3.count(); count3++;
+            
 	    }
-            auto end2 = std::chrono::high_resolution_clock::now();
-    	    std::chrono::duration<double> time2 = end2 - start2;
-	    avg2 += time2.count(); count2++;
         }
-        auto end1 = std::chrono::high_resolution_clock::now();
-    	std::chrono::duration<double> time1 = end1 - start1;
-	avg1 += time1.count(); count1++;
     }
-    std::cout << "The average time it took to run a first loop is " << avg1 / count1 << " seconds." << std::endl;
-    std::cout << "The average time it took to run a second loop is " << avg2 / count2 << " seconds." << std::endl;
-    std::cout << "The average time it took to run a third loop is " << avg3 / count3 << " seconds." << std::endl;
 }
 
 
@@ -386,7 +359,7 @@ __global__ void initializeFrameBuffer(unsigned char* framePointer) {
 	int xThreadIndex = blockIdx.x * blockDim.x + threadIdx.x;
 	int yThreadIndex = blockIdx.y * blockDim.y + threadIdx.y;
 	int threadIndex = yThreadIndex * gridDim.x * blockDim.x + xThreadIndex;
-	if (threadIndex % 4 == 0) {
+	if (threadIndex % 4 == 3) {
 		framePointer[threadIndex] = 255;
 	} else {
 		framePointer[threadIndex] = 0;
@@ -406,14 +379,25 @@ __global__ void initializeDepthBuffer(int* depthPointer) {
 
 //Debugging kernels
 
+
 /*
-__global__ void printVertexStatement(GPUMesh* meshPointerCUDA) {
-	printf("%f\n", meshPointerCUDA[0].vertices[0].x);
+__global__ void printNormalStatement(GPUMesh* meshPointerCUDA) {
+	printf("%f\n", meshPointerCUDA[3].normals[2].x);
 }
 
 __global__ void printObjectStatement(GPUMesh* meshPointerCUDA) {
 	printf("%f\n", meshPointerCUDA[0].objectDiffuseColour.x);
 }*/
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -452,6 +436,7 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
     	depthBuffer[i] = 16777216; // = 2 ^ 24
     }
 
+    auto start = std::chrono::high_resolution_clock::now();
 //Task 4a
     //We need to allocate more buffers on the GPU for both frame and depth.
     size_t frameSizeInBytes = width * height * 4 * sizeof(unsigned char);		
@@ -550,8 +535,10 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
 	normalPointersCPU[j] = new float3[vertexCount];
 	
 	//Copy over the Mesh’s fields into the one in the CPU array.
-	*vertexPointersCPU[j] = *(meshPointerCPU[j].vertices);
-	*normalPointersCPU[j] = *(meshPointerCPU[j].normals);
+	for (unsigned int k = 0; k < vertexCount; k++) {
+	    vertexPointersCPU[j][k] = meshPointerCPU[j].vertices[k];
+	    normalPointersCPU[j][k] = meshPointerCPU[j].normals[k];
+	}
 	
         //Allocate a vertex and normal array on the GPU (of the correct size).	
     	vertexPointersCPUGPU[j] = 0;
@@ -583,9 +570,9 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
     checkCudaErrors(cudaMemcpy(normalPointersGPU, normalPointersCPUGPU, normalPointerSizeInBytes, cudaMemcpyHostToDevice));  
     checkCudaErrors(cudaMemcpy(meshPointerCUDA, meshPointerCPU, meshSizeInBytes, cudaMemcpyHostToDevice));
     
-/*
-    std::cout << "Check that these two values are the same: " << meshes.at(0).vertices[0].x << " = ";
-    printVertexStatement<<<1, 1>>>(meshPointerCUDA);
+
+/*  std::cout << "Check that these two values are the same: " << meshes.at(3).normals[100].x << " = ";
+    printNormalStatement<<<1, 1>>>(meshPointerCUDA);
     checkCudaErrors(cudaDeviceSynchronize());
     std::cout << "Check that these two values are the same: " << meshes.at(0).objectDiffuseColour.x << " = ";
     printObjectStatement<<<1, 1>>>(meshPointerCUDA);
@@ -594,7 +581,6 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
 
     std::cout << "Number of items to be rendered: " << totalItemsToRender << std::endl;
 
-    auto start = std::chrono::high_resolution_clock::now();
     
     unsigned long counter = 0;
     fillWorkQueue(workQueue, largestBoundingBoxSide, depthLimit, &counter);
@@ -607,28 +593,41 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
     checkCudaErrors(cudaMalloc(&workQueueCUDA, workQueueSizeInBytes));
     checkCudaErrors(cudaMemcpy(workQueueCUDA, workQueue, workQueueSizeInBytes, cudaMemcpyHostToDevice));
 
-/////
-	renderMeshes(
-			totalItemsToRender, workQueue,
-			meshes.data(), meshes.size(),
-			width, height, frameBuffer, depthBuffer);
-    
-    auto end = std::chrono::high_resolution_clock::now();
+
+//Task 5a
+	//renderMeshes(totalItemsToRender, workQueue, meshes.data(), meshes.size(), width, height, frameBuffer, depthBuffer);
+
+        dim3 renderBlock = {32, 1, 1};
+	unsigned int renderNumberOfGrids = (totalItemsToRender + 31)/32;
+	dim3 renderGrid = {renderNumberOfGrids, 1, 1};
+	std::cout << "The number of grid blocks necessary is " << renderNumberOfGrids << std::endl;
+	renderMeshes<<<renderGrid, renderBlock>>>(totalItemsToRender, workQueueCUDA, meshPointerCUDA, meshSize, width, height, framePointer, depthPointer);
+  	checkCudaErrors(cudaDeviceSynchronize());	
+
+//Task 5b
+	checkCudaErrors(cudaMemcpy(frameBuffer, framePointer, frameSizeInBytes, cudaMemcpyDeviceToHost));
+
+    	auto end = std::chrono::high_resolution_clock::now();
 
     std::chrono::duration<double> time_taken = end - start;
 
-    std::cout << "The time it took to run the work queue is " << time_taken.count() << " seconds." << std::endl;
+    std::cout << "The time it took to run the work queue on GPU is " << time_taken.count() << " seconds." << std::endl;
 
     std::cout << "Finished!" << std::endl;
 
+    // Copy the output picture into a vector so that the image dump code is happy :)
+    std::vector<unsigned char> outputFramebuffer(frameBuffer, frameBuffer + (width * height * 4));
+
 /////
     //Free all allocations from CPU and GPU memory.
+    delete frameBuffer; 
     delete prop; 
     delete depthBuffer;
     delete meshPointerCPU;
     cudaFree(framePointer);
     cudaFree(depthPointer);
     cudaFree(meshPointerCUDA);
+    cudaFree(workQueueCUDA);
     
     for (unsigned int i = 0; i < meshSize; i++) {
     	delete [] vertexPointersCPU[i];
@@ -642,10 +641,6 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
     delete normalPointersCPUGPU;
     cudaFree(vertexPointersGPU);
     cudaFree(normalPointersGPU);
-
-    // Copy the output picture into a vector so that the image dump code is happy :)
-    std::vector<unsigned char> outputFramebuffer(frameBuffer, frameBuffer + (width * height * 4));
-    delete frameBuffer; 
 
     return outputFramebuffer;
 }
