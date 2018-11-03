@@ -404,6 +404,17 @@ __global__ void initializeDepthBuffer(int* depthPointer) {
 }
 
 
+//Debugging kernels
+
+/*
+__global__ void printVertexStatement(GPUMesh* meshPointerCUDA) {
+	printf("%f\n", meshPointerCUDA[0].vertices[0].x);
+}
+
+__global__ void printObjectStatement(GPUMesh* meshPointerCUDA) {
+	printf("%f\n", meshPointerCUDA[0].objectDiffuseColour.x);
+}*/
+
 
 
 // This function kicks off the rasterisation process.
@@ -440,7 +451,8 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
 	for(unsigned int i = 0; i < width * height; i++) {
     	depthBuffer[i] = 16777216; // = 2 ^ 24
     }
-    
+
+//Task 4a
     //We need to allocate more buffers on the GPU for both frame and depth.
     size_t frameSizeInBytes = width * height * 4 * sizeof(unsigned char);		
     size_t depthSizeInBytes = width * height * sizeof(int);		
@@ -452,10 +464,11 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
     //checkCudaErrors(cudaMemcpy(framePointer, frameBuffer, frameSizeInBytes, cudaMemcpyHostToDevice));
     //checkCudaErrors(cudaMemcpy(depthPointer, depthBuffer, depthSizeInBytes, cudaMemcpyHostToDevice));
 
+//Task 4b
     int frameGridSize = (width * height * 4 + 127) / 128;
     int depthGridSize = (width * height + 31) / 32;
-    std::cout << "Maximum frame grid size is " << frameGridSize << std::endl;
-    std::cout << "Maximum depth grid size is " << depthGridSize << std::endl;
+    //std::cout << "Maximum frame grid size is " << frameGridSize << std::endl;
+    //std::cout << "Maximum depth grid size is " << depthGridSize << std::endl;
     dim3 frameBlock(32, 4, 1);
     dim3 frameGrid(frameGridSize, 1, 1);
     dim3 depthBlock(32, 1, 1);
@@ -465,6 +478,8 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
 
     checkCudaErrors(cudaDeviceSynchronize());
 
+
+/////
     float3 boundingBoxMin = make_float3(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
     float3 boundingBoxMax = make_float3(std::numeric_limits<float>::min(), std::numeric_limits<float>::min(), std::numeric_limits<float>::min());
 
@@ -497,6 +512,85 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
     }
 
     workItemGPU* workQueue = new workItemGPU[totalItemsToRender];
+    
+    //std::vector<GPUMesh> meshes = loadWavefrontGPU(inputFile, false);
+    unsigned int meshSize = meshes.size();
+    std::cout << "Number of meshes: " << meshSize << std::endl;
+/////
+
+
+//Task 4d
+    //Allocate array of meshes on the CPU
+    GPUMesh* meshPointerCPU = new GPUMesh[meshSize];
+    for (unsigned int i = 0; i < meshSize; i++) {
+    	meshPointerCPU[i] = meshes.at(i);
+    }
+
+    //Allocate array of meshes on the GPU
+    GPUMesh* meshPointerCUDA = 0;
+    unsigned int meshSizeInBytes = meshSize * sizeof(GPUMesh);
+    checkCudaErrors(cudaMalloc(&meshPointerCUDA, meshSizeInBytes));
+
+
+    //Allocate pointers for vertices and normals on CPU, where CPUGPU is an array of GPU pointers stored on CPU.
+    float4** vertexPointersCPUGPU = new float4*[meshSize];
+    float3** normalPointersCPUGPU = new float3*[meshSize];
+    float4** vertexPointersCPU = new float4*[meshSize];
+    float3** normalPointersCPU = new float3*[meshSize];
+
+
+    //Allocate vertices and normals on the GPU, and copy them over from CPU memory
+    unsigned int vertexSizeInBytes, vertexCount;
+    unsigned int normalSizeInBytes;
+    for (unsigned int j = 0; j < meshSize; j++) {
+	vertexCount = meshPointerCPU[j].vertexCount;
+	
+	//Allocate vertices for a given mesh on the CPU
+    	vertexPointersCPU[j] = new float4[vertexCount];
+	normalPointersCPU[j] = new float3[vertexCount];
+	
+	//Copy over the Mesh’s fields into the one in the CPU array.
+	*vertexPointersCPU[j] = *(meshPointerCPU[j].vertices);
+	*normalPointersCPU[j] = *(meshPointerCPU[j].normals);
+	
+        //Allocate a vertex and normal array on the GPU (of the correct size).	
+    	vertexPointersCPUGPU[j] = 0;
+	normalPointersCPUGPU[j] = 0;
+	vertexSizeInBytes = vertexCount * sizeof(float4);
+	normalSizeInBytes = vertexCount * sizeof(float3);
+	checkCudaErrors(cudaMalloc(&vertexPointersCPUGPU[j], vertexSizeInBytes));
+	checkCudaErrors(cudaMalloc(&normalPointersCPUGPU[j], normalSizeInBytes));
+	
+	//Store the device pointers in the allocated array on the CPU side which you allocated previously.
+	meshPointerCPU[j].vertices = vertexPointersCPUGPU[j];
+	meshPointerCPU[j].normals = normalPointersCPUGPU[j];
+	
+ 	//Use cudaMemCpy() to copy the contents of those buffers over to the GPU.
+	checkCudaErrors(cudaMemcpy(vertexPointersCPUGPU[j], vertexPointersCPU[j], vertexSizeInBytes, cudaMemcpyHostToDevice));
+	checkCudaErrors(cudaMemcpy(normalPointersCPUGPU[j], normalPointersCPU[j], normalSizeInBytes, cudaMemcpyHostToDevice));
+    }
+
+    //Allocate full GPU pointers
+    float4** vertexPointersGPU = 0;
+    float3** normalPointersGPU = 0;
+    unsigned int vertexPointerSizeInBytes = meshSize * sizeof(float4*);
+    unsigned int normalPointerSizeInBytes = meshSize * sizeof(float3*);
+    checkCudaErrors(cudaMalloc(&vertexPointersGPU, vertexPointerSizeInBytes));
+    checkCudaErrors(cudaMalloc(&normalPointersGPU, vertexPointerSizeInBytes));
+    
+    //Finally, use cudaMemcpy() to copy over the CPU allocated array to the GPU.
+    checkCudaErrors(cudaMemcpy(vertexPointersGPU, vertexPointersCPUGPU, vertexPointerSizeInBytes, cudaMemcpyHostToDevice));  
+    checkCudaErrors(cudaMemcpy(normalPointersGPU, normalPointersCPUGPU, normalPointerSizeInBytes, cudaMemcpyHostToDevice));  
+    checkCudaErrors(cudaMemcpy(meshPointerCUDA, meshPointerCPU, meshSizeInBytes, cudaMemcpyHostToDevice));
+    
+/*
+    std::cout << "Check that these two values are the same: " << meshes.at(0).vertices[0].x << " = ";
+    printVertexStatement<<<1, 1>>>(meshPointerCUDA);
+    checkCudaErrors(cudaDeviceSynchronize());
+    std::cout << "Check that these two values are the same: " << meshes.at(0).objectDiffuseColour.x << " = ";
+    printObjectStatement<<<1, 1>>>(meshPointerCUDA);
+    checkCudaErrors(cudaDeviceSynchronize());
+*/
 
     std::cout << "Number of items to be rendered: " << totalItemsToRender << std::endl;
 
@@ -504,7 +598,16 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
     
     unsigned long counter = 0;
     fillWorkQueue(workQueue, largestBoundingBoxSide, depthLimit, &counter);
+   
+//Task 4c 
+    //Allocate workQueue on GPU.
+    workItemGPU* workQueueCUDA = 0;
+    int workQueueSizeInBytes = totalItemsToRender * sizeof(workItemGPU);
+    
+    checkCudaErrors(cudaMalloc(&workQueueCUDA, workQueueSizeInBytes));
+    checkCudaErrors(cudaMemcpy(workQueueCUDA, workQueue, workQueueSizeInBytes, cudaMemcpyHostToDevice));
 
+/////
 	renderMeshes(
 			totalItemsToRender, workQueue,
 			meshes.data(), meshes.size(),
@@ -518,12 +621,31 @@ std::vector<unsigned char> rasteriseGPU(std::string inputFile, unsigned int widt
 
     std::cout << "Finished!" << std::endl;
 
-    delete prop; delete frameBuffer; delete depthBuffer;
+/////
+    //Free all allocations from CPU and GPU memory.
+    delete prop; 
+    delete depthBuffer;
+    delete meshPointerCPU;
     cudaFree(framePointer);
     cudaFree(depthPointer);
+    cudaFree(meshPointerCUDA);
+    
+    for (unsigned int i = 0; i < meshSize; i++) {
+    	delete [] vertexPointersCPU[i];
+	delete [] normalPointersCPU[i];
+	cudaFree(vertexPointersCPUGPU[i]);
+    	cudaFree(normalPointersCPUGPU[i]);
+    }
+    delete vertexPointersCPU;
+    delete normalPointersCPU;
+    delete vertexPointersCPUGPU;
+    delete normalPointersCPUGPU;
+    cudaFree(vertexPointersGPU);
+    cudaFree(normalPointersGPU);
 
     // Copy the output picture into a vector so that the image dump code is happy :)
     std::vector<unsigned char> outputFramebuffer(frameBuffer, frameBuffer + (width * height * 4));
+    delete frameBuffer; 
 
     return outputFramebuffer;
 }
